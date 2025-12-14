@@ -27,69 +27,84 @@
         const branch = 'main';
         const basePath = 'data/';
         let token = localStorage.getItem('githubToken');
-        if (!token) {
-            token = prompt('Entre ton PAT GitHub (ghp_...) pour sync/upload/delete');
-            localStorage.setItem('githubToken', token);
-        }
         let currentPath = '';
 
+        // Force le prompt au chargement si pas de token
+        if (!token) {
+            token = prompt('⚠️ Entre ton Personal Access Token GitHub (ghp_...) pour que le cloud fonctionne (list/upload/delete). Il sera stocké seulement dans ton navigateur.');
+            if (token) localStorage.setItem('githubToken', token);
+            else alert('Sans token, le cloud ne peut pas lister/uploader/supprimer !');
+        }
+
         async function listFiles(path = '') {
+            if (!token) return document.getElementById('files').innerHTML = '<p class="text-red-600">Token manquant ! Recharge et entre ton PAT.</p>';
             currentPath = path;
             const fullPath = basePath + path;
             const url = `https://api.github.com/repos/${repo}/contents/${fullPath}?ref=${branch}`;
-            const res = await fetch(url, {headers: {Authorization: `token ${token}`}});
-            if (!res.ok) return alert('Erreur : vérifie ton token ou connexion');
-            const data = await res.json();
-            document.getElementById('path').innerHTML = `<strong>📂 Dossier :</strong> /data/${path || 'racine'}`;
-            const container = document.getElementById('files');
-            container.innerHTML = '<ul class="grid grid-cols-1 md:grid-cols-2 gap-4">';
-            // Bouton parent si pas à la racine
-            if (path) {
-                const parent = path.split('/').slice(0, -2).join('/') + '/';
-                const li = document.createElement('li');
-                li.className = 'item p-4 rounded-lg bg-blue-100 text-center font-bold';
-                li.innerHTML = '⬆️ Dossier parent';
-                li.onclick = () => listFiles(parent);
-                container.querySelector('ul').appendChild(li);
-            }
-            data.forEach(item => {
-                const li = document.createElement('li');
-                li.className = 'item p-4 rounded-lg bg-gray-50 border border-gray-200 flex justify-between items-center';
-                if (item.type === 'dir') {
-                    li.innerHTML = `<span>📁 <strong>${item.name}</strong></span>`;
-                    li.onclick = (e) => { if (!e.target.closest('button')) listFiles(path + item.name + '/'); };
-                } else {
-                    li.innerHTML = `<span>📄 ${item.name} <small class="text-gray-500">(${ (item.size / 1024).toFixed(1) } KB)</small></span>
-                        <div>
-                            <a href="${item.download_url}" download="${item.name}" class="bg-green-600 text-white px-3 py-1 rounded mr-2 hover:bg-green-700">Télécharger</a>
-                            <button onclick="deleteFile('${item.path}')" class="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700">Supprimer</button>
-                        </div>`;
+            try {
+                const res = await fetch(url, {headers: {Authorization: `token ${token}`}});
+                if (!res.ok) {
+                    console.error('Erreur API:', res.status, await res.text());
+                    return alert('Erreur API GitHub : mauvais token ou rate limit. Vérifie console (F12).');
                 }
-                container.querySelector('ul').appendChild(li);
-            });
-            container.innerHTML += '</ul>';
+                const data = await res.json();
+                // ... (le reste du code listage identique à avant, avec boutons Télécharger et Supprimer)
+                document.getElementById('path').innerHTML = `<strong>📂 Dossier :</strong> /data/${path || 'racine'}`;
+                const container = document.getElementById('files');
+                container.innerHTML = '<ul class="grid grid-cols-1 md:grid-cols-2 gap-4">';
+                if (path) {
+                    const parent = path.split('/').slice(0, -2).join('/') + '/';
+                    const li = document.createElement('li');
+                    li.className = 'item p-4 rounded-lg bg-blue-100 text-center font-bold';
+                    li.innerHTML = '⬆️ Dossier parent';
+                    li.onclick = () => listFiles(parent);
+                    container.querySelector('ul').appendChild(li);
+                }
+                data.forEach(item => {
+                    const li = document.createElement('li');
+                    li.className = 'item p-4 rounded-lg bg-gray-50 border border-gray-200 flex justify-between items-center';
+                    if (item.type === 'dir') {
+                        li.innerHTML = `<span>📁 <strong>${item.name}</strong></span>`;
+                        li.onclick = (e) => { if (!e.target.closest('button')) listFiles(path + item.name + '/'); };
+                    } else {
+                        li.innerHTML = `<span>📄 ${item.name} <small class="text-gray-500">(${ (item.size / 1024).toFixed(1) } KB)</small></span>
+                            <div>
+                                <a href="${item.download_url}" download="${item.name}" class="bg-green-600 text-white px-3 py-1 rounded mr-2 hover:bg-green-700">Télécharger</a>
+                                <button onclick="deleteFile('${item.path}', event)" class="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700">Supprimer</button>
+                            </div>`;
+                    }
+                    container.querySelector('ul').appendChild(li);
+                });
+                container.innerHTML += '</ul>';
+            } catch (err) {
+                console.error('Erreur JS:', err);
+                alert('Erreur JavaScript : ouvre console F12 pour détails.');
+            }
         }
 
         async function uploadFiles() {
+            if (!token) return alert('Token manquant !');
             const files = document.getElementById('fileInput').files;
             for (let file of files) {
-                const reader = new FileReader();
-                reader.onload = async () => {
-                    const content = btoa(reader.result);
-                    await fetch(`https://api.github.com/repos/${repo}/contents/${basePath}${currentPath}${file.name}`, {
-                        method: 'PUT',
-                        headers: {Authorization: `token ${token}`, 'Content-Type': 'application/json'},
-                        body: JSON.stringify({message: 'Upload via web', content, branch})
-                    });
-                };
-                reader.readAsBinaryString(file);
+                const arrayBuffer = await file.arrayBuffer();
+                const uint8 = new Uint8Array(arrayBuffer);
+                let binary = '';
+                uint8.forEach(byte => binary += String.fromCharCode(byte));
+                const content = btoa(binary);
+                const filePath = basePath + currentPath + file.name;
+                await fetch(`https://api.github.com/repos/${repo}/contents/${filePath}`, {
+                    method: 'PUT',
+                    headers: {Authorization: `token ${token}`, 'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: 'Upload via web', content, branch})
+                });
             }
-            alert('Upload terminé !');
+            alert('Upload terminé ! Rafraîchissement...');
             listFiles(currentPath);
         }
 
-        async function deleteFile(filePath) {
-            if (!confirm('Supprimer ce fichier ?')) return;
+        async function deleteFile(filePath, event) {
+            event.stopPropagation();
+            if (!confirm('Supprimer définitivement ?')) return;
             const shaRes = await fetch(`https://api.github.com/repos/${repo}/contents/${filePath}?ref=${branch}`, {headers: {Authorization: `token ${token}`}});
             const shaData = await shaRes.json();
             await fetch(`https://api.github.com/repos/${repo}/contents/${filePath}`, {
@@ -100,6 +115,7 @@
             listFiles(currentPath);
         }
 
+        // Chargement initial
         listFiles();
         setInterval(() => listFiles(currentPath), 5000);
     </script>
