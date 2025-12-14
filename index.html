@@ -1,119 +1,52 @@
-<!DOCTYPE html>
-<html lang="fr" class="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mon Cloud - lucmigmol-dev</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>tailwind.config = { darkMode: 'class' }</script>
-    <style>
-        body { font-family: system-ui, sans-serif; transition: all 0.3s; }
-        .glass { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
-        .dark .glass { background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.05); }
-        .item { transition: all 0.3s; }
-        .item:hover { transform: translateY(-4px); box-shadow: 0 10px 20px rgba(0,0,0,0.3); }
-        #log { max-height: 200px; overflow-y: auto; }
-    </style>
-</head>
-<body class="bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 min-h-screen text-white">
-    <div class="container mx-auto p-6 max-w-5xl">
-        <div class="flex justify-between items-center mb-12">
-            <h1 class="text-5xl font-bold text-indigo-300 drop-shadow-lg">☁️ Mon Cloud Personnel</h1>
-            <button id="darkToggle" class="text-4xl">☀️</button>
-        </div>
+#!/data/data/com.termux/files/usr/bin/bash
 
-        <div class="glass rounded-2xl p-8 mb-8 shadow-2xl">
-            <div class="flex flex-col md:flex-row gap-6">
-                <input type="text" id="search" placeholder="🔍 Rechercher..." class="flex-1 px-6 py-4 rounded-xl bg-white/10 border border-white/20 focus:outline-none text-lg">
-                <div class="flex flex-col gap-4">
-                    <input type="file" id="fileInput" multiple class="block text-sm text-gray-300 file:mr-4 file:py-3 file:px-6 file:rounded-xl file:bg-indigo-600 file:text-white">
-                    <button id="uploadBtn" class="bg-indigo-600 text-white px-8 py-4 rounded-xl font-bold hover:bg-indigo-700">Uploader</button>
-                </div>
-            </div>
-        </div>
+# Installation notification si pas fait (une fois)
+pkg install termux-api > /dev/null 2>&1
 
-        <div id="status" class="text-center text-xl mb-6 text-green-400"></div>
-        <div id="path" class="text-xl mb-6 text-indigo-300"></div>
-        <div id="files" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+REPO_PATH="/storage/emulated/0/MonCloud/free_cloud"
 
-        <div class="glass rounded-2xl p-6 mt-12">
-            <h2 class="text-2xl mb-4">📜 Journal des actions</h2>
-            <div id="log" class="text-sm space-y-1 text-gray-300"></div>
-        </div>
-    </div>
+cd "$REPO_PATH" || { echo "Erreur : dossier repo introuvable !"; exit 1; }
 
-    <script>
-        const repo = 'lucmigmol-dev/free_cloud';
-        const branch = 'main';
-        const basePath = 'data/';
-        let token = localStorage.getItem('githubToken');
-        let currentPath = '';
-        let allItems = [];
+echo "🚀 Auto-sync mobile démarré ! (Ctrl+C pour arrêter)"
+termux-notification --title "Mon Cloud Sync" --content "Sync auto lancé sur téléphone" --ongoing
 
-        if (!token) {
-            token = prompt('Entre ton PAT GitHub pour full accès');
-            if (token) localStorage.setItem('githubToken', token);
-        }
+while true; do
+    echo "$(date +'%H:%M:%S') - 🔄 Tentative de sync..."
 
-        const logDiv = document.getElementById('log');
-        function addLog(msg) {
-            const time = new Date().toLocaleTimeString();
-            logDiv.innerHTML += `<div>${time} - ${msg}</div>`;
-            logDiv.scrollTop = logDiv.scrollHeight;
-        }
+    # Pull changements distants
+    PULL_OUTPUT=$(git pull origin main 2>&1)
+    if echo "$PULL_OUTPUT" | grep -q "Already up to date"; then
+        echo "   ✓ Pull : déjà à jour"
+    elif echo "$PULL_OUTPUT" | grep -q "Fast-forward\|Updating"; then
+        echo "   ✅ Pull : nouveaux fichiers reçus !"
+        termux-notification --title "Mon Cloud" --content "Nouveaux fichiers synchronisés depuis distant"
+    elif echo "$PULL_OUTPUT" | grep -q "CONFLICT"; then
+        echo "   ⚠️ Conflit détecté ! Résous manuellement"
+        termux-notification --title "Mon Cloud ⚠️" --content "Conflit Git - vérifie le dossier"
+    else
+        echo "   ⚠️ Pull : $PULL_OUTPUT"
+    fi
 
-        // Dark toggle
-        document.getElementById('darkToggle').onclick = () => {
-            document.documentElement.classList.toggle('dark');
-            document.getElementById('darkToggle').textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙';
-        };
+    # Vérifie changements locaux
+    STATUS=$(git status --porcelain)
+    if [ -n "$STATUS" ]; then
+        echo "   📁 Changements locaux détectés (ajout/modif/suppr)"
 
-        // Recherche + list + render (comme avant, avec filtre . fichiers cachés)
+        git add .
+        git commit -m "Auto-sync mobile $(date +'%Y-%m-%d %H:%M:%S')" > /dev/null 2>&1
 
-        // Upload avec messages
-        document.getElementById('uploadBtn').onclick = async () => {
-            if (!token) return alert('Token manquant');
-            const files = document.getElementById('fileInput').files;
-            if (files.length === 0) return addLog('⚠️ Aucun fichier sélectionné');
-            addLog(`🚀 Début upload de ${files.length} fichier(s)...`);
-            document.getElementById('status').textContent = 'Upload en cours...';
-            for (let file of files) {
-                try {
-                    const arrayBuffer = await file.arrayBuffer();
-                    const uint8 = new Uint8Array(arrayBuffer);
-                    let binary = '';
-                    uint8.forEach(byte => binary += String.fromCharCode(byte));
-                    const content = btoa(binary);
-                    const res = await fetch(`https://api.github.com/repos/${repo}/contents/${basePath}${currentPath}${encodeURIComponent(file.name)}`, {
-                        method: 'PUT',
-                        headers: {Authorization: `token ${token}`, 'Content-Type': 'application/json'},
-                        body: JSON.stringify({message: `Upload ${file.name} via web`, content, branch})
-                    });
-                    if (res.ok) {
-                        addLog(`✅ ${file.name} uploadé avec succès !`);
-                    } else {
-                        addLog(`❌ Erreur upload ${file.name}`);
-                    }
-                } catch (e) {
-                    addLog(`❌ Erreur ${file.name}: ${e.message}`);
-                }
-            }
-            document.getElementById('status').textContent = 'Upload terminé !';
-            listFiles(currentPath);
-        };
+        PUSH_OUTPUT=$(git push origin main 2>&1)
+        if [ $? -eq 0 ]; then
+            echo "   ✅ Push : changements envoyés avec succès !"
+            termux-notification --title "Mon Cloud" --content "Fichiers ajoutés/modifiés synchronisés vers GitHub"
+        else
+            echo "   ❌ Push échoué : $PUSH_OUTPUT"
+            termux-notification --title "Mon Cloud ⚠️" --content "Erreur push - vérifie connexion/PAT"
+        fi
+    else
+        echo "   ✓ Pas de changements locaux"
+    fi
 
-        // Delete avec message
-        async function deleteFile(filePath) {
-            if (!confirm('Supprimer ?')) return;
-            addLog('🗑️ Suppression en cours...');
-            // ... code delete comme avant
-            if (success) addLog('✅ Fichier supprimé');
-            listFiles(currentPath);
-        }
-
-        addLog('🌟 Site chargé - prêt pour sync');
-        listFiles();
-        setInterval(() => listFiles(currentPath), 5000);
-    </script>
-</body>
-</html>
+    echo "   😴 Attente 10 secondes..."
+    sleep 10
+done
