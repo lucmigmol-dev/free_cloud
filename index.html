@@ -7,47 +7,63 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: system-ui, sans-serif; background: linear-gradient(to bottom, #f3f4f6, #ffffff); }
-        .file { transition: all 0.2s; }
-        .file:hover { transform: scale(1.02); background-color: #e5e7eb; }
+        .item { transition: all 0.2s; }
+        .item:hover { transform: scale(1.02); background-color: #e5e7eb; }
     </style>
 </head>
 <body class="min-h-screen">
     <div class="container mx-auto p-6 max-w-4xl">
         <h1 class="text-5xl font-bold text-center mb-10 text-indigo-800 drop-shadow-md">☁️ Mon Cloud Personnel</h1>
         <div id="upload" class="mb-8 p-6 bg-white rounded-xl shadow-lg">
-            <input type="file" id="fileInput" multiple class="mb-4 block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 focus:outline-none">
-            <button onclick="uploadFiles()" class="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-indigo-700 transition">Uploader des fichiers</button>
+            <input type="file" id="fileInput" multiple class="mb-4 block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50">
+            <button onclick="uploadFiles()" class="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-indigo-700">Uploader</button>
         </div>
+        <div id="path" class="text-lg mb-4 text-gray-700"></div>
         <div id="files" class="bg-white rounded-xl shadow-lg p-6"></div>
     </div>
 
     <script>
         const repo = 'lucmigmol-dev/free_cloud';
         const branch = 'main';
-        const basePath = 'data/';  // Seulement data !
+        const basePath = 'data/';
         let token = localStorage.getItem('githubToken');
         if (!token) {
-            token = prompt('Entre ton PAT GitHub (ghp_...) pour sync/upload (stocké localement)');
+            token = prompt('Entre ton PAT GitHub (ghp_...) pour sync/upload/delete');
             localStorage.setItem('githubToken', token);
         }
+        let currentPath = '';
 
         async function listFiles(path = '') {
+            currentPath = path;
             const fullPath = basePath + path;
             const url = `https://api.github.com/repos/${repo}/contents/${fullPath}?ref=${branch}`;
             const res = await fetch(url, {headers: {Authorization: `token ${token}`}});
-            if (!res.ok) return alert('Erreur API : vérifie ton token ou connexion');
+            if (!res.ok) return alert('Erreur : vérifie ton token ou connexion');
             const data = await res.json();
+            document.getElementById('path').innerHTML = `<strong>📂 Dossier :</strong> /data/${path || 'racine'}`;
             const container = document.getElementById('files');
-            container.innerHTML = `<h2 class="text-3xl font-semibold mb-6 text-gray-800">📂 Dossier : ${path || 'Racine'}</h2><ul class="grid grid-cols-1 md:grid-cols-2 gap-4">`;
+            container.innerHTML = '<ul class="grid grid-cols-1 md:grid-cols-2 gap-4">';
+            // Bouton parent si pas à la racine
+            if (path) {
+                const parent = path.split('/').slice(0, -2).join('/') + '/';
+                const li = document.createElement('li');
+                li.className = 'item p-4 rounded-lg bg-blue-100 text-center font-bold';
+                li.innerHTML = '⬆️ Dossier parent';
+                li.onclick = () => listFiles(parent);
+                container.querySelector('ul').appendChild(li);
+            }
             data.forEach(item => {
                 const li = document.createElement('li');
-                li.className = 'file p-4 rounded-lg bg-gray-50 border border-gray-200 hover:shadow-md';
+                li.className = 'item p-4 rounded-lg bg-gray-50 border border-gray-200 flex justify-between items-center';
                 if (item.type === 'dir') {
-                    li.innerHTML = `📁 <strong>${item.name}</strong>`;
-                    li.onclick = () => listFiles(`${path}${item.name}/`);
+                    li.innerHTML = `<span>📁 <strong>${item.name}</strong></span>`;
+                    li.onclick = (e) => { if (!e.target.closest('button')) listFiles(path + item.name + '/'); };
                 } else {
-                    li.innerHTML = `📄 ${item.name} <span class="text-sm text-gray-500">(${ (item.size / 1024).toFixed(1) } KB)</span>`;
-                    li.onclick = () => window.open(item.download_url, '_blank');
+                    li.innerHTML = `<span>📄 ${item.name} <small class="text-gray-500">(${ (item.size / 1024).toFixed(1) } KB)</small></span>
+                        <div>
+                            <a href="${item.download_url}" download="${item.name}" class="bg-green-600 text-white px-3 py-1 rounded mr-2 hover:bg-green-700">Télécharger</a>
+                            <button onclick="deleteFile('${item.path}')" class="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700">Supprimer</button>
+                        </div>`;
                 }
                 container.querySelector('ul').appendChild(li);
             });
@@ -59,21 +75,33 @@
             for (let file of files) {
                 const reader = new FileReader();
                 reader.onload = async () => {
-                    const content = btoa(reader.result);  // Base64 pour tout type de fichier
-                    await fetch(`https://api.github.com/repos/${repo}/contents/${basePath}${file.name}`, {
+                    const content = btoa(reader.result);
+                    await fetch(`https://api.github.com/repos/${repo}/contents/${basePath}${currentPath}${file.name}`, {
                         method: 'PUT',
                         headers: {Authorization: `token ${token}`, 'Content-Type': 'application/json'},
-                        body: JSON.stringify({message: 'Upload via cloud web', content, branch})
+                        body: JSON.stringify({message: 'Upload via web', content, branch})
                     });
                 };
                 reader.readAsBinaryString(file);
             }
-            alert('Upload en cours... Rafraîchis dans 5 sec !');
-            setTimeout(listFiles, 6000);
+            alert('Upload terminé !');
+            listFiles(currentPath);
+        }
+
+        async function deleteFile(filePath) {
+            if (!confirm('Supprimer ce fichier ?')) return;
+            const shaRes = await fetch(`https://api.github.com/repos/${repo}/contents/${filePath}?ref=${branch}`, {headers: {Authorization: `token ${token}`}});
+            const shaData = await shaRes.json();
+            await fetch(`https://api.github.com/repos/${repo}/contents/${filePath}`, {
+                method: 'DELETE',
+                headers: {Authorization: `token ${token}`, 'Content-Type': 'application/json'},
+                body: JSON.stringify({message: 'Delete via web', sha: shaData.sha, branch})
+            });
+            listFiles(currentPath);
         }
 
         listFiles();
-        setInterval(listFiles, 5000);  // Sync toutes les 5 sec !
+        setInterval(() => listFiles(currentPath), 5000);
     </script>
 </body>
 </html>
